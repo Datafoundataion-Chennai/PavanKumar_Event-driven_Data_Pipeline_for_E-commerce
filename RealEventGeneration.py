@@ -7,25 +7,20 @@ from IPython.display import display, clear_output
 import ConnectBigQuery as BQ
 from google.cloud import bigquery
 
-# Initialize Faker
 fake = Faker()
 
-# Define a variety of event types to simulate real customer behavior
 EVENT_TYPES = [
     "page_view", "search_product", "view_product", "add_to_cart",
     "remove_from_cart", "wishlist_add", "wishlist_remove", "apply_coupon",
     "checkout", "purchase", "login", "logout"
 ]
 
-# Create an empty DataFrame
 columns = ["event_id", "user_id", "event_type", "product_id", "price", "timestamp"]
 events_df = pd.DataFrame(columns=columns)
 
-# Function to generate a fake event
 def generate_event():
-    event_type = random.choice(EVENT_TYPES)  # Randomly pick an event type
+    event_type = random.choice(EVENT_TYPES) 
     
-    # Some events might not have a product_id or price (e.g., login, logout)
     product_id = fake.uuid4() if event_type not in ["login", "logout"] else None
     price = round(random.uniform(5, 500), 2) if event_type in ["add_to_cart", "purchase", "apply_coupon", "checkout"] else None
     
@@ -53,13 +48,9 @@ def stream_to_bigquery(event):
 
 
 # Simulate real-time events
-for _ in range(100):  # Generate 20 events in real time
-    new_event = generate_event()  # Generate a new event
+for _ in range(100): 
+    new_event = generate_event()  
     stream_to_bigquery(new_event)
-    events_df = pd.concat([events_df, pd.DataFrame([new_event])], ignore_index=True)  # Append to DataFrame
-    
-    # Clear previous output and display updated DataFrame
+    events_df = pd.concat([events_df, pd.DataFrame([new_event])], ignore_index=True)    
     clear_output(wait=True)
-    # display(events_df)
-    
-    time.sleep(1)  # Simulate real-time event streaming (1-second delay)
+    time.sleep(1) 

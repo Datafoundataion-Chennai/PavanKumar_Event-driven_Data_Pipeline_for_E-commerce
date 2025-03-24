@@ -14,16 +14,28 @@ GEOLOCATION_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.geolocation"
 
 
 
-
+ALLSTATS = f"""
+            SELECT COUNT(DISTINCT order_id) AS total_orders,
+                SUM(price + freight_value) AS total_Revenue,
+                (SELECT COUNT(DISTINCT customer_id) FROM {CUSTOMER_TABLE} ) AS active_customers,
+                COUNT(DISTINCT product_id) AS total_products_sold,
+                AVG(price + freight_value) AS avg_order_value
+            FROM {ORDERITEMS_TABLE}
+            """
 TOP_PRODUCTS = f"""
-SELECT REPLACE(INITCAP(p.product_category_name),"_","") as ProductCategory, SUM(oi.price) AS Revenue
- FROM `{ORDER_TABLE}` oi
- INNER JOIN  `{PRODUCTS_TABLE}` p ON
- oi.product_id=p.product_id
- group by p.product_category_name
- order by Revenue desc LIMIT 10
- """
- 
+                SELECT REPLACE(INITCAP(p.product_category_name),"_","") as ProductCategory, SUM(oi.price) AS Revenue
+                FROM `{ORDER_TABLE}` oi
+                INNER JOIN  `{PRODUCTS_TABLE}` p ON
+                oi.product_id=p.product_id
+                group by p.product_category_name
+                order by Revenue desc LIMIT 10
+                """
+
+REAL_EVENTS= f"""
+                    SELECT event_id as EventId, user_id as UserId, REPLACE(INITCAP(event_type),"_","") as EventType, product_id as ProductId, price as Price, timestamp as TimeStamp
+                    FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.events`
+                    ORDER BY TimeStamp DESC;
+                    """
  
 ORDER_TABLE_DETAILS= f"""SELECT order_id AS OrderId,
                     customer_id AS CustomerId,
@@ -66,12 +78,27 @@ customer_growth_query = f"""
                     GROUP BY OrderDate ORDER BY OrderDate
                     """
 
+customer_behavior_query = f"""
+                    SELECT 
+                    SUM(CASE WHEN order_purchase_timestamp >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS returning_customers,
+                    COUNT(DISTINCT customer_id) AS total_customers
+                    FROM {ORDER_TABLE}
+                    """
+review_query = f"""
+                SELECT ROUND(AVG(review_score), 2) AS avg_rating FROM {ORDERREVIEWS_TABLE}
+                """
 seller_Revenue_query = f"""
                     SELECT s.seller_id AS SellerID, SUM(oi.price) AS Revenue
                     FROM {ORDERITEMS_TABLE} oi
                     JOIN {SELLERS_TABLE} s ON oi.seller_id = s.seller_id
                     GROUP BY s.seller_id ORDER BY Revenue DESC LIMIT 10
                     """
+geo_query = f"""
+                SELECT g.geolocation_state AS state, COUNT(o.customer_id) AS CustomerCount
+                FROM {GEOLOCATION_TABLE} g
+                JOIN {CUSTOMER_TABLE} o ON g.geolocation_zip_code_prefix = o.customer_zip_code_prefix
+                GROUP BY state ORDER BY order_count DESC
+                """
                     
 TOP_PRODUCTS = f"""
                     SELECT REPLACE(INITCAP(p.product_category_name),"_","") as ProductCategory, SUM(oi.price) AS Revenue
@@ -88,4 +115,17 @@ WORST_PRODUCTS = f"""
                     oi.product_id=p.product_id
                     group by p.product_category_name
                     order by Revenue LIMIT 10
+                    """
+QUERY_ORDER_STATUS = f"""
+                    SELECT UPPER(order_status) as OrderStatus, COUNT(*) as Count
+                    FROM {ORDER_TABLE}
+                    GROUP BY OrderStatus
+                    ORDER BY Count DESC;
+                    """
+
+QUERY_DAILY_ORDERS = f"""
+                    SELECT DATE(order_purchase_timestamp) as OrderDate, COUNT(*) as orders
+                    FROM {ORDER_TABLE}
+                    GROUP BY OrderDate
+                    ORDER BY OrderDate;
                     """

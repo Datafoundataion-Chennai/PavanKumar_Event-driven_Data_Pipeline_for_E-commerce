@@ -6,71 +6,30 @@ import time
 import plotly.express as px
 import Queries as Q
 client = bigquery.Client()
+from loggingModule import logger
+
 
 EVENT_TYPES = [
     "page_view", "search_product", "view_product", "add_to_cart",
     "remove_from_cart", "wishlist_add", "wishlist_remove", "apply_coupon",
     "checkout", "purchase", "login", "logout"
 ]
-BQ_ORDERS_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.orders"
-QUERY_ORDER_STATUS = f"""
-SELECT UPPER(order_status) as OrderStatus, COUNT(*) as Count
-FROM `{BQ_ORDERS_TABLE}`
-GROUP BY OrderStatus
-ORDER BY Count DESC;
-"""
 
-QUERY_DAILY_ORDERS = f"""
-SELECT DATE(order_purchase_timestamp) as OrderDate, COUNT(*) as orders
-FROM `{BQ_ORDERS_TABLE}`
-GROUP BY OrderDate
-ORDER BY OrderDate;
-"""
-
-ALLSTATS = f"""
-  SELECT COUNT(DISTINCT order_id) AS total_orders,
-    SUM(price + freight_value) AS total_Revenue,
-    (SELECT COUNT(DISTINCT customer_id) FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.customers` ) AS active_customers,
-    COUNT(DISTINCT product_id) AS total_products_sold,
-    AVG(price + freight_value) AS avg_order_value
-FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.order_items`
-"""
-geo_query = f"""
-SELECT g.geolocation_state AS state, COUNT(o.order_id) AS order_count
-FROM`{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.geolocation` g
-JOIN `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.orders` o ON g.geolocation_zip_code_prefix = o.customer_zip_code_prefix
-GROUP BY state ORDER BY order_count DESC
-"""
-customer_behavior_query = f"""
-SELECT 
-    SUM(CASE WHEN order_purchase_timestamp >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 1 ELSE 0 END) AS returning_customers,
-    COUNT(DISTINCT customer_id) AS total_customers
-FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.orders`
-"""
-review_query = f"""
-SELECT ROUND(AVG(review_score), 2) AS avg_rating FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.order_reviews`
-"""
-
-
- 
+@st.cache_data
 def fetch_batch_data(query):
     return client.query(query).to_dataframe()
 
 def fetch_realtime_events(i):
     query = f"""
     SELECT event_id EventId, user_id UserId, REPLACE(INITCAP(event_type),"_","") as EventType, product_id ProductId, price as Price, timestamp as TimeStamp 
-    FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.events`
+    FROM {Q.EVENT_TABLE}
     WHERE PARSE_TIMESTAMP('%Y-%m-%dT%H:%M:%E*S', TimeStamp) 
     >= TIMESTAMP_SUB(TIMESTAMP(DATETIME(CURRENT_TIMESTAMP(), "Asia/Kolkata")), INTERVAL {int(i)} MINUTE)
     ORDER BY TimeStamp DESC;
     """
     return client.query(query).to_dataframe()
 def fetch_all_events():
-    query = f"""
-    SELECT event_id as EventId, user_id as UserId, REPLACE(INITCAP(event_type),"_","") as EventType, product_id as ProductId, price as Price, timestamp as TimeStamp
-    FROM `{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.events`
-    ORDER BY TimeStamp DESC;
-    """
+    query = Q.REAL_EVENT
     return client.query(query).to_dataframe()
 
 
@@ -116,7 +75,8 @@ def main():
     
     if st.session_state.view_option == "Overview":
         st.header("Overview")
-        kpi_data = fetch_batch_data(ALLSTATS).iloc[0]
+        logger.info("Overview page Viewed")
+        kpi_data = fetch_batch_data(Q.ALLSTATS).iloc[0]
         kpi_data["total_orders"] = int(kpi_data["total_orders"])
         kpi_data["total_Revenue"] = float(kpi_data["total_Revenue"])  
         kpi_data["active_customers"] = int(kpi_data["active_customers"])
@@ -186,8 +146,8 @@ def main():
             animate_metric(0, round(kpi_data["avg_order_value"], 2), unit="Rs.")  
             
         st.markdown("<br><br>", unsafe_allow_html=True)
-        customer_behavior_data = fetch_batch_data(customer_behavior_query).iloc[0]
-        review_data = fetch_batch_data(review_query).iloc[0]
+        customer_behavior_data = fetch_batch_data(Q.customer_behavior_query).iloc[0]
+        review_data = fetch_batch_data(Q.review_query).iloc[0]
 
         col6, col7 = st.columns([1,1])
         with col6:
@@ -244,11 +204,6 @@ def main():
             customer_growth_data = fetch_batch_data(Q.customer_growth_query)
             fig_growth = px.line(customer_growth_data, x='OrderDate', y='NewCustomers', title="Customer Growth Over Time", color_discrete_sequence=["#00CC96"])
             st.plotly_chart(fig_growth)
-            # # Geographical Distribution
-            # geo_data = fetch_batch_data(geo_query)
-            # fig_geo = px.choropleth(geo_data, locations='state', locationmode='USA-states', color='order_count',
-            #                         title="Orders by State", scope="usa", color_continuous_scale='blues')
-            # st.plotly_chart(fig_geo)  
         with tab2:  
             tab2.subheader("All Tables Data")
             tab1,tab2,tab3,tab4,tab5 = st.tabs(["Customers","Orders","Sellers","Products","Order Payments"])
@@ -390,7 +345,7 @@ def main():
                         df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
 
                 with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0,key="odPay_row")
+                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=1,key="odPay_row")
                     total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
 
                 if "current_page" not in st.session_state:
@@ -414,9 +369,10 @@ def main():
                         st.session_state.current_page += 1
     elif st.session_state.view_option == "Order Summary":
         st.header("📦 Order Summary")
+        logger.info("Order page Viewed")
         st.success("Order summary data Analysis.")
-        order_status_data = fetch_batch_data(QUERY_ORDER_STATUS)
-        daily_orders_data = fetch_batch_data(QUERY_DAILY_ORDERS)
+        order_status_data = fetch_batch_data(Q.QUERY_ORDER_STATUS)
+        daily_orders_data = fetch_batch_data(Q.QUERY_DAILY_ORDERS)
         tab1, tab2 = st.tabs(["📈 Charts", "🗃 Tables"])
         with tab1:
             st.subheader("Order Status Distribution")
@@ -528,7 +484,8 @@ def main():
                     st.session_state.current_page += 1
     elif st.session_state.view_option == "Event Analytics":
         st.header("📈 Event Analytics")
-        st.success("All Events Details ")
+        st.success("All Events Details ")  
+        logger.info("Event page Viewed")
         tab1, tab2 = st.tabs(["📈 Charts", "🗃 Tables"])
         with tab1:
             df = fetch_all_events()
@@ -597,6 +554,7 @@ def main():
                     st.session_state.current_page += 1
     elif st.session_state.view_option == "Live Event Feed":
         st.header("⚡ Live Event Feed (Default Last 10 Minutes)")
+        logger.info("Live Event page Viewed")
         time_range = st.selectbox("Select Time Range (Minutes)", [10, 20, 30, 40, 50, 60], index=0)
         st.success(f"Real-time event data for the last {time_range} minutes.")
         df = fetch_realtime_events(time_range)
@@ -661,5 +619,10 @@ def main():
         time.sleep(10)
         st.rerun()
 if __name__ == "__main__":
-    main()
+    try:
+        
+        main()
+    except Exception as e:
+        logger.warning(e)
+        st.markdown("Error Occur \n This is the Error Description",e)
 
