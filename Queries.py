@@ -10,7 +10,8 @@ PRODUCTCATEGORY_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.product_category_name_
 SELLERS_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.sellers"
 ORDERREVIEWS_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.order_reviews"
 GEOLOCATION_TABLE = f"{BQ.BQ_PROJECT}.{BQ.BQ_DATASET}.geolocation"
-
+BQ_PROJECT = "eternal-tendril-454201-t8"
+BQ_DATASET = "EventEcom"
 
 
 

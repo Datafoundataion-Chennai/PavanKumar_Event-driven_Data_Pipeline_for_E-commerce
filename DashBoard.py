@@ -1,5 +1,5 @@
 import streamlit as st
-import ConnectBigQuery as BQ
+# import ConnectBigQuery as BQ
 from google.cloud import bigquery
 import pandas as pd
 import time
@@ -7,7 +7,7 @@ import plotly.express as px
 import Queries as Q
 client = bigquery.Client()
 from loggingModule import logger
-
+import archivedFiles.create as c
 
 EVENT_TYPES = [
     "page_view", "search_product", "view_product", "add_to_cart",
@@ -29,13 +29,12 @@ def fetch_realtime_events(i):
     """
     return client.query(query).to_dataframe()
 def fetch_all_events():
-    query = Q.REAL_EVENT
+    query = Q.REAL_EVENTS
     return client.query(query).to_dataframe()
 
 
 
-def main():
-    st.set_page_config(layout="wide")
+def main(role):
     st.markdown("""
     <style>
         .title-banner {
@@ -53,9 +52,9 @@ def main():
     </div>
     """, unsafe_allow_html=True)
     st.markdown("")
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4,col5 = st.columns(5)
     if 'view_option' not in st.session_state:
-        st.session_state.view_option = "Overview"
+        st.session_state.view_option = None
     
     with col1:
         if st.button("📊 Overview"):
@@ -72,6 +71,10 @@ def main():
     with col4:
         if st.button("⚡ Live Event Feed"):
             st.session_state.view_option = "Live Event Feed"
+    with col5:
+        if role ==1:
+            if st.button("Create New Table"):
+                st.session_state.view_option = "Create New Table"
     
     if st.session_state.view_option == "Overview":
         st.header("Overview")
@@ -157,10 +160,10 @@ def main():
             st.metric("Average Customer Rating", f"{review_data['avg_rating']:.2f}/5")
         
         st.markdown("<br><br>", unsafe_allow_html=True)
+        
         tab1, tab2 = st.tabs(["📈 Chart", "🗃 Tables"])
         with tab1:
             tab1.subheader("All ChartS")
-            # Top Products Bar Chart
             top_products_data = fetch_batch_data(Q.TOP_PRODUCTS)
             worst_products_data = fetch_batch_data(Q.WORST_PRODUCTS)
 
@@ -189,8 +192,6 @@ def main():
                     color_continuous_scale="Reds",
                 )
                 st.plotly_chart(fig_worst_products, use_container_width=True) 
-            
-            # Top Sellers Revenue Chart
             seller_Revenue_data = fetch_batch_data(Q.seller_Revenue_query)
             fig_sellers = px.bar(seller_Revenue_data, x="SellerID",
             y="Revenue",
@@ -200,173 +201,116 @@ def main():
             animation_frame="date" if "date" in seller_Revenue_data.columns else None 
             )
             st.plotly_chart(fig_sellers)
-            # Customer Growth Chart
             customer_growth_data = fetch_batch_data(Q.customer_growth_query)
             fig_growth = px.line(customer_growth_data, x='OrderDate', y='NewCustomers', title="Customer Growth Over Time", color_discrete_sequence=["#00CC96"])
             st.plotly_chart(fig_growth)
         with tab2:  
+            def to_camel_case(name):
+                words = name.split("_")
+                return "".join(word.capitalize() for word in words)
+            def get_table_names():
+                query = f"SELECT table_name FROM `{client.project}.{Q.BQ_DATASET}.INFORMATION_SCHEMA.TABLES`"
+                df = client.query(query).to_dataframe()
+                
+                table_names = df["table_name"].tolist()
+                formatted_names = [to_camel_case(name) for name in table_names]
+
+                return table_names, formatted_names
+            def fetch_bath_data(table_name):
+                query = f"SELECT * FROM `{client.project}.{Q.BQ_DATASET}.{table_name}` LIMIT 1000"
+                df = client.query(query).to_dataframe()
+                df.columns = [to_camel_case(col) for col in df.columns]
+                return df
+
+            def update_record(table_name, row_data, row_index):
+                updates = ", ".join([f"{col}='{val}'" for col, val in row_data.items()])
+                query = f"UPDATE `{client.project}.{Q.BQ_DATASET}.{table_name}` SET {updates} WHERE id = {row_data['Id']}"
+                client.query(query).result()
+                st.success(f"Row {row_index + 1} updated successfully!")
+            def delete_record(table_name, row_id):
+                query = f"DELETE FROM `{client.project}.{Q.BQ_DATASET}.{table_name}` WHERE id = {row_id}"
+                client.query(query).result()
+                st.warning(f"Row {row_id} deleted successfully!")
+            def add_new_row(table_name, new_row_data):
+                for key, value in new_row_data.items():
+                    if key.lower() == "id": 
+                        try:
+                            new_row_data[key] = int(value)
+                        except ValueError:
+                            st.error(f"Invalid value for ID: {value}. Must be an integer.")
+                            return
+
+                columns = ", ".join(new_row_data.keys())
+                values = ", ".join([f"'{val}'" if isinstance(val, str) else str(val) for val in new_row_data.values()])
+
+                query = f"INSERT INTO `{client.project}.{Q.BQ_DATASET}.{table_name}` ({columns}) VALUES ({values})"
+                
+                try:
+                    client.query(query).result()
+                    st.success("New row added successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error inserting row: {e}")
+            table_names, formatted_names = get_table_names()
             tab2.subheader("All Tables Data")
-            tab1,tab2,tab3,tab4,tab5 = st.tabs(["Customers","Orders","Sellers","Products","Order Payments"])
-            with tab1:
-                df = fetch_batch_data(Q.CUSTOMER_TABLE_DETAILS)
-                col1,col2 = st.columns(2)
-                with col1:
-                    search_query = st.text_input("Search across all columns" ,key="customer_Search")
+            if table_names:
+                tabs = st.tabs(formatted_names)
+                for tab, table_name, formatted_name in zip(tabs, table_names, formatted_names):
+                    with tab:  
+                        df = fetch_bath_data(table_name)
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            search_query = st.text_input(f"Search in {formatted_name}", key=f"{table_name}_search")
 
-                    if search_query:
-                        df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
+                            if search_query:
+                                df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
+                        with col2:
+                            rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0, key=f"{table_name}_rows")
+                            total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
+                        if f"{table_name}_current_page" not in st.session_state:
+                            st.session_state[f"{table_name}_current_page"] = 1
 
-                with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0,key="customer_row")
-                    total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
+                        start_idx = (st.session_state[f"{table_name}_current_page"] - 1) * rows_per_page
+                        end_idx = start_idx + rows_per_page
+                        paginated_df = df.iloc[start_idx:end_idx]
+                        if role == 1:
+                            paginated_df["Edit"] = ["✏️ Edit"] * len(paginated_df)
+                            paginated_df["Delete"] = ["🗑️ Delete"] * len(paginated_df)
 
-                if "current_page" not in st.session_state:
-                    st.session_state.current_page = 1
-                
-                start_idx = (st.session_state.current_page - 1) * rows_per_page
-                end_idx = start_idx + rows_per_page
-                paginated_df = df.iloc[start_idx:end_idx]
-                st.dataframe(paginated_df, height=500)
-                pagination_container = st.columns([1, 3, 1])
+                        edited_df = st.data_editor(paginated_df, height=500, key=f"{table_name}_editor")
+                        if role == 1:
+                            for index, row in edited_df.iterrows():
+                                row_id = row.get("Id")
+                                
+                                if row.get("Edit") == "Clicked":
+                                    update_record(table_name, row.to_dict(), index)
 
-                with pagination_container[0]:
-                    if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state.current_page == 1),key="cus-Pre"):
-                        st.session_state.current_page -= 1
+                                if row.get("Delete") == "Clicked":
+                                    delete_record(table_name, row_id)
+                        pagination_container = st.columns([1, 3, 1])
 
-                with pagination_container[1]:
-                    st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</h5>", unsafe_allow_html=True)
+                        with pagination_container[0]:
+                            if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state[f"{table_name}_current_page"] == 1), key=f"{table_name}_prev"):
+                                st.session_state[f"{table_name}_current_page"] -= 1
 
-                with pagination_container[2]:
-                    if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages),key="cus-for"):
-                        st.session_state.current_page += 1
-            with tab2:
-                df = fetch_batch_data(Q.ORDER_TABLE_DETAILS)
-                col1,col2 = st.columns(2)
-                with col1:
-                    search_query = st.text_input("Search across all columns",key="order_search")
+                        with pagination_container[1]:
+                            st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state[f'{table_name}_current_page']} of {total_pages}</h5>", unsafe_allow_html=True)
 
-                    if search_query:
-                        df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
+                        with pagination_container[2]:
+                            if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state[f"{table_name}_current_page"] == total_pages), key=f"{table_name}_next"):
+                                st.session_state[f"{table_name}_current_page"] += 1
+                        if role == 1:
+                            st.subheader(f"Add New Row to {formatted_name}")
 
-                with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0,key="order_row")
-                    total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
+                            new_row = {}
+                            for col in df.columns:
+                                new_row[col] = st.text_input(f"Enter {col}", key=f"new_{table_name}_{col}")
 
-                if "current_page" not in st.session_state:
-                    st.session_state.current_page = 1
-                
-                start_idx = (st.session_state.current_page - 1) * rows_per_page
-                end_idx = start_idx + rows_per_page
-                paginated_df = df.iloc[start_idx:end_idx]
-                st.dataframe(paginated_df, height=500)
-                pagination_container = st.columns([1, 3, 1])
+                            if st.button("Add Row", key=f"add_{table_name}"):
+                                add_new_row(table_name, new_row)
 
-                with pagination_container[0]:
-                    if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state.current_page == 1),key="order-pre"):
-                        st.session_state.current_page -= 1
-
-                with pagination_container[1]:
-                    st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</h5>", unsafe_allow_html=True)
-
-                with pagination_container[2]:
-                    if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages),key="order-forw"):
-                        st.session_state.current_page += 1
-            with tab3:
-                df = fetch_batch_data(Q.SELLERS_TABLE_DETAILS)
-                col1,col2 = st.columns(2)
-                with col1:
-                    search_query = st.text_input("Search across all columns",key="seller_search")
-
-                    if search_query:
-                        df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
-
-                with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0,key="seller_row")
-                    total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
-
-                if "current_page" not in st.session_state:
-                    st.session_state.current_page = 1
-                
-                start_idx = (st.session_state.current_page - 1) * rows_per_page
-                end_idx = start_idx + rows_per_page
-                paginated_df = df.iloc[start_idx:end_idx]
-                st.dataframe(paginated_df, height=500)
-                pagination_container = st.columns([1, 3, 1])
-
-                with pagination_container[0]:
-                    if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state.current_page == 1),key="seller-pre"):
-                        st.session_state.current_page -= 1
-
-                with pagination_container[1]:
-                    st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</h5>", unsafe_allow_html=True)
-
-                with pagination_container[2]:
-                    if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages),key="seller-forw"):
-                        st.session_state.current_page += 1
-            with tab4:
-                df = fetch_batch_data(Q.PRODUCTS_TABLE_DETAILS)
-                col1,col2 = st.columns(2)
-                with col1:
-                    search_query = st.text_input("Search across all columns",key="prod_search")
-
-                    if search_query:
-                        df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
-
-                with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=0,key="prod_row")
-                    total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
-
-                if "current_page" not in st.session_state:
-                    st.session_state.current_page = 1
-                
-                start_idx = (st.session_state.current_page - 1) * rows_per_page
-                end_idx = start_idx + rows_per_page
-                paginated_df = df.iloc[start_idx:end_idx]
-                st.dataframe(paginated_df, height=500)
-                pagination_container = st.columns([1, 3, 1])
-
-                with pagination_container[0]:
-                    if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state.current_page == 1),key="prod-pre"):
-                        st.session_state.current_page -= 1
-
-                with pagination_container[1]:
-                    st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</h5>", unsafe_allow_html=True)
-
-                with pagination_container[2]:
-                    if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages),key="prod-forw"):
-                        st.session_state.current_page += 1
-            with tab5:
-                df = fetch_batch_data(Q.ORDERPAYMENTS_TABLE_DETAILS)
-                col1,col2 = st.columns(2)
-                with col1:
-                    search_query = st.text_input("Search across all columns",key="odPay_search")
-
-                    if search_query:
-                        df = df[df.apply(lambda row: row.astype(str).str.contains(search_query, case=False, na=False).any(), axis=1)]
-
-                with col2:
-                    rows_per_page = st.selectbox("Rows per page", [25, 50, 75, 100], index=1,key="odPay_row")
-                    total_pages = max(1, (len(df) // rows_per_page) + (1 if len(df) % rows_per_page > 0 else 0))
-
-                if "current_page" not in st.session_state:
-                    st.session_state.current_page = 1
-                
-                start_idx = (st.session_state.current_page - 1) * rows_per_page
-                end_idx = start_idx + rows_per_page
-                paginated_df = df.iloc[start_idx:end_idx]
-                st.dataframe(paginated_df, height=500)
-                pagination_container = st.columns([1, 3, 1])
-
-                with pagination_container[0]:
-                    if st.button("⬅️ Previous", use_container_width=True, disabled=(st.session_state.current_page == 1),key="odPay-pre"):
-                        st.session_state.current_page -= 1
-
-                with pagination_container[1]:
-                    st.markdown(f"<h5 style='text-align: center;'>Page {st.session_state.current_page} of {total_pages}</h5>", unsafe_allow_html=True)
-
-                with pagination_container[2]:
-                    if st.button("Next ➡️", use_container_width=True, disabled=(st.session_state.current_page == total_pages),key="odPay-forw"):
-                        st.session_state.current_page += 1
+            else:
+                st.error("No tables found in the dataset.")
     elif st.session_state.view_option == "Order Summary":
         st.header("📦 Order Summary")
         logger.info("Order page Viewed")
@@ -618,11 +562,62 @@ def main():
                     st.session_state.current_page += 1
         time.sleep(10)
         st.rerun()
-if __name__ == "__main__":
-    try:
+
+    elif st.session_state.view_option == "Create New Table":
+        st.title("Create New Table")
+        dataset_id = Q.BQ_DATASET
+        table_name = st.text_input("Enter Table Name")
+        num_fields = st.number_input("Number of Columns", min_value=1, step=1, value=1)
+
+        fields = []
+        st.subheader("Define Columns")
+        for i in range(num_fields):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                field_name = st.text_input(f"Column {i+1} Name", key=f"name_{i}")
+            with col2:
+                field_type = st.selectbox(
+                    f"Column {i+1} Type", 
+                    ["STRING", "INTEGER", "FLOAT", "BOOLEAN", "TIMESTAMP", "DATE"], 
+                    key=f"type_{i}"
+                )
+            with col3:
+                constraint = st.selectbox(
+                    f"Constraint {i+1}", 
+                    ["", "NOT NULL","PRIMARY KEY"],
+                    key=f"constraint_{i}"
+                )
+            with col4:
+                default_value = st.text_input(
+                    f"Default Value {i+1} (optional)", key=f"default_{i}"
+                )
+            field_def = f"{field_name} {field_type}"
+            if constraint:
+                field_def += f" {constraint}"
+            if default_value:
+                field_def += f" DEFAULT {default_value}"
+
+            fields.append(field_def)
+        if st.button("Create Table"):
+            if dataset_id and table_name and fields:
+                table_ref = f"{Q.BQ_PROJECT}.{dataset_id}.{table_name}"
+                create_query = f"CREATE TABLE `{table_ref}` ({', '.join(fields)});"
+                try:
+                    client.query(create_query).result()
+                    st.success(f"Table `{table_name}` created successfully in `{dataset_id}`!")
+                    logger.info(f"Table `{table_name}` created successfully in `{dataset_id}`!")
+                    
+                except Exception as e:
+                    st.error(f"Error: {e}")
+            else:
+                st.error("Please enter dataset ID, table name, and define fields properly.")
+                logger.error("Please enter dataset ID, table name, and define fields properly.")
         
-        main()
+st.set_page_config(layout="wide")
+if __name__ == "__main__":
+    try: 
+        main(1)
     except Exception as e:
         logger.warning(e)
-        st.markdown("Error Occur \n This is the Error Description",e)
-
+        st.markdown(f"Error Occurred\n This is the Error Description: {e}")
